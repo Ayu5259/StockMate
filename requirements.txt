@@ -1,0 +1,4 @@
+python-telegram-bot==21.5
+pytse-client==0.19.1
+pandas==2.2.2
+python-dotenv==1.0.1
