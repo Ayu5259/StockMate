@@ -1,0 +1,29 @@
+BOT_TOKEN = "8271496353:AAFsle6gIYeRdL1slpjxtbKoAR23I24oeR4"
+https://api.telegram.org
+
+"""
+import httpx
+
+resp = httpx.get("https://api.telegram.org", timeout=10.0)
+print(resp.status_code)
+print(resp.text[:200])
+
+"""
+
+http://www.tsetmc.com/tsev2/data/instinfodata.aspx?i=778253364357513&c=27+
+
+
+ text = (
+        f"سلام {user.first_name}\n"
+        "من  گربه وال‌استریت هستم.\n\n"
+        "رخصت بدید غلامیتونو کنم\n"
+        "برای دیدن اطلاعات یک نماد:\n"
+        "فقط اسم نماد را مرحمت بفرمایید (مثال: فملی ، وبملت)\n\n"
+
+        "برای تحلیل تکنیکال حقیرانه ما:\n"
+        " /ta فملی\n"
+        "یا بنویسید: تحلیل فملی\n\n"
+
+        "برای دریافت خودکار خلاصه اخبار بورس هر روز:\n"
+        "/subscribe_news را بفرستید."
+    )
