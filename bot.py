@@ -1,14 +1,4 @@
-"""
-کارهای اصلی این ماژول:
-1. راه‌اندازی ربات تلگرام با استفاده از python-telegram-bot
-2. تعریف هندلرهای اصلی (مثل /start و دریافت نام نماد به صورت پیام متنی)
-3. استفاده از توابع api.main برای گرفتن اطلاعات نماد و ساختن متن پاسخ
-
-در حال حاضر:
-- کاربر می‌تواند با دستور /start راهنما را ببیند.
-- با ارسال نام یک نماد (مثل «فملی») اطلاعات همان نماد را دریافت می‌کند.
-"""
-
+# bot.py
 import os
 from telegram import Update
 from telegram.ext import (
@@ -18,27 +8,30 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from telegram.request import HTTPXRequest  # برای کنترل timeout و تنظیمات شبکه
+from telegram.request import HTTPXRequest
+from dotenv import load_dotenv
+
 from api.main import get_stock_info, format_stock_message
-
-# نکته امنیتی:
-# در عمل، بهتر است توکن را از متغیر محیطی (ENV) بخوانی،
-# نه این که آن را مستقیم داخل کد بنویسی.
-# این کار برای تست شخصی اشکال ندارد، ولی برای کد پابلیک/گیت باید حتماً مخفی باشد.
-BOT_TOKEN = "8271496353:AAFsle6gIYeRdL1slpjxtbKoAR23I24oeR4"
+#from newsletter.handlers import register_newsletter_handlers 
 
 
-def clean_proxy_env() -> None:
-    """
-    پاک کردن تمام متغیرهای محیطی مربوط به پروکسی برای همین پروسس.
+# ----------------- Env / Proxy helpers -----------------
+def load_settings():
+    global BOT_TOKEN
+    load_dotenv()
 
-    منطق کلی:
-    - بعضی وقت‌ها سیستم یا محیط (مثلا VPN، نرم‌افزارهای دیگر)
-      متغیرهای HTTP_PROXY و HTTPS_PROXY را تنظیم می‌کنند.
-    - این تنظیمات ممکن است باعث مشکل در اتصال ربات به تلگرام شود.
-    - با این تابع، قبل از راه‌اندازی ربات، این متغیرها را حذف می‌کنیم تا
-      ربات مستقیم و بدون پروکسی به تلگرام وصل شود (یا پروکسی را خودمان مدیریت کنیم).
-    """
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN is not set in .env")
+
+    telegram_proxy_enabled = os.getenv("TELEGRAM_PROXY_ENABLED", "False").lower() == "true"
+    proxy_telegram = os.getenv("PROXY_TELEGRAM", "").strip()
+
+    return telegram_proxy_enabled, proxy_telegram
+
+
+def clean_proxy_env():
+    """Remove OS-level proxies so فقط چیزهایی که ما تنظیم کرده‌ایم اعمال شوند."""
     for var in [
         "HTTP_PROXY",
         "HTTPS_PROXY",
@@ -47,120 +40,79 @@ def clean_proxy_env() -> None:
         "https_proxy",
         "all_proxy",
     ]:
+        if var in os.environ:
+            print(f"[bot] Removing {var} from env")
         os.environ.pop(var, None)
 
 
-#Bot main handelers
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    هندلر دستور /start
-
-    کارهایی که انجام می‌دهد:
-    - نمایش یک پیام خوش‌آمدگویی
-    - توضیح نحوه‌ی استفاده از ربات (ارسال نماد، تحلیل تکنیکال، خبرنامه و ...)
-
-    ورودی‌ها:
-        update: آبجکت شامل اطلاعات پیام و کاربر
-        context: کانتکست ربات (برای دسترسی به دیتاهای اضافی در آینده)
-    """
+# Handlers
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (
         f"سلام {user.first_name}\n"
         "من گربه وال‌استریت هستم 🐱📈\n\n"
-        "برای دیدن اطلاعات یک نماد:\n"
-        "فقط اسم نماد را مرحمت بفرمایید (مثال: فملی ، وآوا)\n\n"
-        "برای تحلیل تکنیکال:\n"
-        "/ta فملی\n"
-        "یا بنویسید: تحلیل فملی\n\n"
-        "برای دریافت خودکار خلاصه اخبار بورس هر روز:\n"
-        "/subscribe_news را بفرستید.\n\n"
-        "برای دیدن خلاصه وضعیت لایو بازار:\n"
-        "/news_live\n\n"
-        "برای خلاصه تابلوی امروز بازار:\n"
-        "/news_tablo\n"
+        "فعلا در این نسخه فقط اطلاعات نماد را بهت نشان می‌دهم.\n"
+        "کافی است اسم نماد بورسی را بفرستی، مثلا:\n"
+        "فملی\n"
+        "فولاد\n"
+        "خساپا\n"
     )
-    # ارسال پیام راهنما به همان چتی که /start ارسال شده است
     await update.message.reply_text(text)
 
 
-async def handle_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    هندلر پیام‌های متنی که قرار است به عنوان نام نماد تفسیر شوند.
-
-    منطق کلی:
-    - متن پیام را به عنوان نماد (symbol) می‌گیریم.
-    - اگر خالی بود، از کاربر می‌خواهیم نماد را ارسال کند.
-    - اگر نماد وجود داشت، از get_stock_info اطلاعات می‌گیریم.
-    - با format_stock_message یک متن فارسی مرتب می‌سازیم و به کاربر می‌فرستیم.
-    - در صورت بروز خطا، یک پیام خطای دوستانه برای کاربر، و جزئیات خطا در کنسول چاپ می‌شود.
-
-    ورودی‌ها:
-        update: شامل پیام متنی کاربر
-        context: کانتکست ربات (فعلاً استفاده‌ای ندارد ولی برای آینده مفید است)
-    """
+async def handle_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = (update.message.text or "").strip()
-
     if not symbol:
-        await update.message.reply_text("لطفا اسم نماد را هم مرحمت بفرمایید.")
+        await update.message.reply_text("لطفا نام نماد را بفرست.")
         return
 
-    try:
-        info = get_stock_info(symbol)
-        reply_text = format_stock_message(info)
-    except Exception as e:
-        # برای لاگ خودمان در کنسول (در آینده می‌توان با logging جایگزین کرد)
-        print(f"[handle_symbol] error for symbol '{symbol}': {e}")
-        reply_text = (
-            "اووپس ... در گرفتن اطلاعات این نماد به مشکل خوردم. "
-            "کمی بعد دوباره امتحان کن."
-        )
+    info = get_stock_info(symbol)
+    if not info:
+        await update.message.reply_text(f"نتوانستم اطلاعاتی برای نماد «{symbol}» پیدا کنم.")
+        return
 
+    reply_text = format_stock_message(info)
     await update.message.reply_text(reply_text)
 
 
-#main
-def main() -> None:
-    """
-    نقطه شروع اجرای ربات.
+# main 
+def main():
+    # 1) بارگذاری تنظیمات از .env
+    telegram_proxy_enabled, proxy_telegram = load_settings()
 
-    کارهایی که این تابع انجام می‌دهد:
-    1. چاپ وضعیت متغیرهای پروکسی قبل و بعد از پاک‌سازی (برای دیباگ).
-    2. پاک کردن متغیرهای پروکسی با clean_proxy_env.
-    3. ساختن یک HTTPXRequest با timeoutهای مشخص برای ارتباط پایدارتر.
-    4. ساخت Application (اپلیکیشن ربات) با توکن و تنظیمات شبکه.
-    5. ثبت هندلرها:
-        - /start → تابع start
-        - هر پیام متنی ساده (غیر از دستورات) → تابع handle_symbol
-    6. اجرای polling برای دریافت پیام‌ها از تلگرام.
-    """
-    # فقط برای دیباگ و مشاهده وضعیت قبل از پاک کردن پروکسی‌ها
     print("Before cleaning proxy env vars:")
     print("  HTTP_PROXY =", os.environ.get("HTTP_PROXY"))
     print("  HTTPS_PROXY =", os.environ.get("HTTPS_PROXY"))
     print("  http_proxy =", os.environ.get("http_proxy"))
     print("  https_proxy =", os.environ.get("https_proxy"))
 
+    # 2) تمیز کردن پروکسی‌های سیستم
     clean_proxy_env()
 
-    # دوباره وضعیت متغیرها را بعد از پاک کردن نمایش می‌دهیم
     print("After cleaning proxy env vars:")
     print("  HTTP_PROXY =", os.environ.get("HTTP_PROXY"))
     print("  HTTPS_PROXY =", os.environ.get("HTTPS_PROXY"))
     print("  http_proxy =", os.environ.get("http_proxy"))
     print("  https_proxy =", os.environ.get("https_proxy"))
 
-    # تنظیمات درخواست‌های شبکه به تلگرام
-    request = HTTPXRequest(
-        connect_timeout=20.0,
-        read_timeout=20.0,
-        write_timeout=20.0,
-        pool_timeout=20.0,
-        http_version="1.1",
-    )
+    # 3) ساخت HTTPXRequest با یا بدون پروکسی
+    request_kwargs = {
+        "connect_timeout": 20.0,
+        "read_timeout": 20.0,
+        "write_timeout": 20.0,
+        "pool_timeout": 20.0,
+        "http_version": "1.1",
+    }
 
-    print("Bot is running.")
+    if telegram_proxy_enabled and proxy_telegram:
+        print(f"[BOT] Using Telegram proxy: {proxy_telegram}")
+        request_kwargs["proxy"] = proxy_telegram
+    else:
+        print("[BOT] No proxy for Telegram (direct connection).")
 
-    # ساختن اپلیکیشن ربات با توکن و تنظیمات درخواست
+    request = HTTPXRequest(**request_kwargs)
+
+    # 4) ساخت اپ تلگرام
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
@@ -168,14 +120,16 @@ def main() -> None:
         .build()
     )
 
-    # هندلر دستور /start
+    # 5) هندلرها
     app.add_handler(CommandHandler("start", start))
-
-    # هندلر مخصوص نمادها:
-    # هر پیام متنی که دستور (command) نباشد، به عنوان نام نماد فرض می‌کنیم.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_symbol))
 
-    # شروع polling برای دریافت پیام‌ها از تلگرام
+    # try:
+    #     register_newsletter_handlers(app)
+    # except Exception as e:
+    #     print(f"[WARN] newsletter handlers not registered: {e}")
+
+    print("Bot is running. Press Ctrl+C to stop.")
     app.run_polling()
 
 

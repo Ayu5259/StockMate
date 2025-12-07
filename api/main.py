@@ -1,32 +1,43 @@
 # api/main.py
-"""
-این فایل مسئول کار با API سایت tsetmc برای گرفتن «نقشه بازار» (Market Map)
-و استخراج اطلاعات پایه یک نماد مشخص است.
-
-کارهای اصلی این ماژول:
-1. ساختن یک سشن requests با تنظیمات مناسب برای دور زدن پروکسی/محیط سیستم
-2. گرفتن داده‌ی Market Map از آدرس مشخص (API_URL)
-3. جست‌وجو در لیست Market Map برای پیدا کردن یک نماد خاص بر اساس:
-   - کد نماد: lVal18AFC
-   - نام فارسی نماد: lVal30
-4. برگرداندن اطلاعات مهم نماد به صورت دیکشنری
-5. تبدیل دیکشنری اطلاعات نماد به یک متن فارسی آماده برای ارسال در تلگرام
-"""
+import os
 import requests
 import unicodedata
 from datetime import datetime
-from requests.exceptions import RequestException
+from dotenv import load_dotenv
+
+load_dotenv()
+
+HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "60"))
+
+USE_PROXY_TSETMC = os.getenv("USE_PROXY_TSETMC", "False").lower() == "true"
+PROXY_TSETMC = os.getenv("PROXY_TSETMC", "")
+
+OFFLINE_DEV_MODE = os.getenv("OFFLINE_DEV_MODE", "False").lower() == "true"
+#یه سشن مشترک برای همه درخواست ها 
+session = requests.Session()
+
+if USE_PROXY_TSETMC and PROXY_TSETMC:
+    session.proxies.update({
+        "http": PROXY_TSETMC,
+        "https": PROXY_TSETMC,
+    })
+    print(f"[TSETMC] Using proxy: {PROXY_TSETMC}")
+else:
+    print("[TSETMC] Not using proxy (direct connection).")
 
 # market map API (TSETMC)
 API_URL = (
     "http://cdn.tsetmc.com/api/ClosingPrice/"
     "GetMarketMap?market=0&size=1360&sector=0&typeSelected=1"
 )
-#یه سشن مشترک برای همه درخواست ها 
-session = requests.Session()
+
 # گه از پروکسی محیط استفاده نکنه
 session.trust_env = False
-session.proxies = {"http": None, "https": None}
+#session.proxies = {"http": None, "https": None}
+#for SSL error
+#session.verify = False
+#resp = session.get(url, timeout=60, verify=False)
+
 
 
 def normalize_symbol(symbol: str) -> str:
@@ -55,57 +66,30 @@ def normalize_symbol(symbol: str) -> str:
     return s
 
 
-def fetch_market_map(url: str = API_URL, retries: int = 3, timeout: float = 60.0) -> list:
+def fetch_market_map(
+    url: str | None = None,
+    retries: int = 3,
+):
     """
-    گرفتن داده Market Map از API tsetmc با مکانیزم تکرار (retry).
-
-    منطق کلی:
-    - تا حداکثر `retries` بار تلاش می‌کند به آدرس داده‌شده درخواست بفرستد.
-    - اگر پاسخ موفق باشد (status code 200)، آن را به صورت JSON می‌خواند.
-    - انتظار داریم داده برگشتی یک لیست باشد. در غیر این صورت خطا می‌دهیم.
-    - در صورت خطای شبکه یا داده غیرمنتظره، چند بار تلاش می‌کند و در نهایت
-      اگر همه‌ی تلاش‌ها ناموفق بود، یک Exception کلی پرتاب می‌کند.
-
-    پارامترها:
-        url: آدرس API (به صورت پیش‌فرض همان API_URL بالا).
-        retries: حداکثر تعداد تلاش برای درخواست مجدد در صورت خطا.
-        timeout: حداکثر زمان انتظار برای پاسخ هر درخواست (ثانیه).
-
-    خروجی:
-        یک لیست (list) از دیکشنری‌ها که هر کدام رکورد یک نماد/آیتم در Market Map است.
-
-استثنا:
-        در صورت شکست همه تلاش‌ها، یک Exception با پیام مناسب پرتاب می‌شود.
+    گرفتن نقشهٔ بازار از TSETMC با ریتری و تایم‌اوت و استفاده از session مشترک.
+    اگر OFFLINE_DEV_MODE روشن باشد، بعداً می‌توانیم اینجا هم mock برگردانیم.
     """
+    if url is None:
+        #ترجیحاً HTTPS
+        url = "https://cdn.tsetmc.com/api/ClosingPrice/GetMarketMap?market=0&size=1360&sector=0&typeSelected=1"
+
     last_exc: Exception | None = None
-# Retry
     for attempt in range(1, retries + 1):
         try:
-            resp = session.get(
-                url,
-                timeout=timeout,
-                headers={
-                 # User-Agent ساده برای شبیه‌سازی مرورگر
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-                },
-            )
-            resp.raise_for_status()  # اگر وضعیت غیر از 200 بود، خطا پرتاب می‌کند
-            data = resp.json()
-            # انتظار داریم پاسخ یک لیست باشد
-            if not isinstance(data, list):
-                raise ValueError("Unexpected data type from TSETMC API (expected list).")
-
-            return data
-
-        except (RequestException, ValueError) as e:
-            # ذخیره آخرین استثنا برای گزارش نهایی
+            resp = session.get(url, timeout=HTTP_TIMEOUT)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
             last_exc = e
             print(
-                f"Request failed (attempt {attempt}/{retries}): {e}. "
-                "Retrying..."
+                f"Request failed (attempt {attempt}/{retries}): {e}. Retrying..."
             )
-
-    # incase it all failed
+    # اگر بعد از همه تلاش‌ها نشد
     raise Exception(f"Failed to fetch data after {retries} retries") from last_exc
 
 
@@ -129,6 +113,26 @@ def get_stock_info(symbol: str) -> dict | None:
     خروجی:
         یک دیکشنری شامل اطلاعات نماد، یا None اگر چیزی پیدا نشود.
     """
+    #offline mode
+    if OFFLINE_DEV_MODE:
+        return {
+            "symbol": symbol,
+            "name": f"نماد تستی {symbol}",
+            "sector": "فلزات اساسي",
+            "last_price": 10000.0,
+            "last_trade": 10100.0,
+            "yesterday_price": 9800.0,
+            "percent_change": 2.04,
+            "percent_change_precise": 2.04,
+            "volume": 12345678.0,
+            "value": 987654321000.0,
+            "trades": 4321.0,
+            "market_cap": 250_000_000_000_000.0,
+            "date": "1403/09/16",
+            "time": "12:30:00",
+            "last_update": "1403-09-16 12:31",
+        }
+    
     sym = normalize_symbol(symbol)
     if not sym:
         return None

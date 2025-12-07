@@ -1,4 +1,8 @@
 # tests/test_history_basic.py
+"""
+python -m tests.test_history_basic
+
+"""
 import os
 import sys
 
